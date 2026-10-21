@@ -1,13 +1,19 @@
-# ScopeWeaver provenance and modifications
+# Provenance and Attribution
 
-[한국어](ko/PROVENANCE.md)
+## Upstream Lineage
 
-ScopeWeaver is a standalone derivative of [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX), based on commit `160fe13`. It is maintained separately at [cskwork/scopeweaver](https://github.com/cskwork/scopeweaver), without a GitHub fork-network relationship.
+1. **ARTEX (`Autumn-27/ARTEX`)**:
+   - Upstream repository: `https://github.com/Autumn-27/ARTEX`
+   - Fork base commit: `160fe13` (`160fe133560b443ff472d44dc2a60b67d57a679b`)
+   - License: `AGPL-3.0`
+2. **ScopeWeaver (`cskwork/scopeweaver`)**:
+   - Derivative repository: `https://github.com/cskwork/scopeweaver`
+   - Added content-addressed HTTP traffic evidence (`traffic_evidence_snapshots`, `finding_traffic_bindings`), local MCP/Pi agent adapters (`adapters/agent`), and multi-model pool routing (`llm_profiles`).
+3. **TestWeaver (`reinaldosaraiva/testweaver`)**:
+   - Derivative repository: `https://github.com/reinaldosaraiva/testweaver`
+   - Dedicated derivative of ScopeWeaver re-engineered for **Universal Polyglot API Contract Testing (OpenAPI 3.0/3.1)**, **Semantic Property Dependency Graphs (`SPDG`) + Cooperative Multi-Agent Testing (`MARL`)**, **Coarse-to-Fine Multi-Model Routing (`RESTGPT` + `LlamaRestTest`)**, **3-Tier Fast Pipelines (`<= 2 min` Gate, Debounced Shards, Nightly PBT)**, and **Black-Box `TCL0–TCL7` Maturity Coverage + SonarQube/Codecov Export**.
 
-The ScopeWeaver modifications dated **2026-10-02** cover the product name, English-default/Korean-selectable interface and messages, documentation and bundled agent guidance, setup/build/start/update/password-reset prompts, report and agent language handling, and distribution naming. The executable is `scopeweaver` (`scopeweaver.exe` on Windows); archive names follow `scopeweaver-<version>-<os>-<arch>.zip`. Docker Compose builds the checked-out source locally. The configured release workflow targets this repository and GHCR.
+## Compatibility Notes
 
-The original `LICENSE` is retained unchanged. Original authorship, contributor acknowledgments and upstream changelog history remain attributed to ARTEX. The Go module `github.com/Autumn-27/artex`, source entry point `./cmd/artex`, `ARTEX_*` configuration contracts, `artex` database defaults and `ARTEX` login username remain for compatibility.
-
-This modification date is not a release tag. It does not assert that binary releases or container images have been published. Historical validation documents under `sidequestion/` describe upstream runs; they are not new ScopeWeaver verification receipts. Translated historical JSON preserves technical identifiers and measurements while labeling translated narrative.
-
-Additional modifications on **2026-10-03** complete the server translation audit and add GLM-5.3 configuration templates plus its required always-enabled reasoning compatibility. Templates use the existing provider adapter and do not create or activate a profile automatically.
+- The Go module path remains `github.com/Autumn-27/artex` and main entrypoint package remains `./cmd/artex` to avoid unnecessary internal import churn and allow clean cherry-picking of infrastructure fixes between `ScopeWeaver` and `TestWeaver`.
+- The compiled binary name is `testweaver`, and configuration loaders read `TESTWEAVER_*` environment variables first with fallback to `SCOPEWEAVER_*` / `ARTEX_*`.

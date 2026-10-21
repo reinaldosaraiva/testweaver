@@ -1,0 +1,4 @@
+{"seq":1,"ts":"2026-10-21T23:03:08.696Z","agent":"reentry-core","event":"note","data":{"text":"initialized Reentry 3.3 journal mode for TestWeaver (derived from ScopeWeaver)"}}
+{"seq":2,"ts":"2026-10-21T23:03:08.696Z","agent":"reentry-core","event":"plan-created","data":{"plan":"P001","title":"Bootstrap Standalone TestWeaver, Reentry 3.3 Loop & Core Rebranding","status":"ACTIVE","currentSession":"P001-S001"}}
+{"seq":3,"ts":"2026-10-21T23:03:08.696Z","agent":"reentry-core","event":"session-sliced","data":{"plan":"P001","session":"P001-S001","status":"READY","purpose":"Design Freeze (GO), Provenance AGPL-3.0, Whiteboard README & GitHub Board Sync","files":"`plans/P001-S001.md`"}}
+{"seq":4,"ts":"2026-10-21T23:03:08.696Z","agent":"reentry-core","event":"current-changed","data":{"plan":"P001","session":"P001-S001"}}
