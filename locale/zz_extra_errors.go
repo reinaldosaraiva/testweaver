@@ -227,11 +227,11 @@ func init() {
 	if !Has("llm: invalid proxy %q: %w") {
 		Register("llm: invalid proxy %q: %w", "llm: invalid proxy %q: %w", "llm: 잘못된 프록시 %q: %w")
 	}
-	if !Has("llm: proxy %q missing scheme (use http://, https:// or socks5://)") {
-		Register("llm: proxy %q missing scheme (use http://, https:// or socks5://)", "llm: proxy %q missing scheme (use http://, https:// or socks5://)", "llm: 프록시 %q에 프로토콜이 없습니다(http://, https:// 또는 socks5:// 사용)")
+	if !Has("llm: proxy %q missing scheme (use http://, https://, socks5:// or socks5h://)") {
+		Register("llm: proxy %q missing scheme (use http://, https://, socks5:// or socks5h://)", "llm: proxy %q missing scheme (use http://, https://, socks5:// or socks5h://)", "llm: 프록시 %q에 프로토콜이 없습니다(http://, https://, socks5:// 또는 socks5h:// 사용)")
 	}
-	if !Has("llm: unsupported proxy scheme %q (use http, https or socks5)") {
-		Register("llm: unsupported proxy scheme %q (use http, https or socks5)", "llm: unsupported proxy scheme %q (use http, https or socks5)", "llm: 지원하지 않는 프록시 프로토콜 %q(http, https 또는 socks5 사용)")
+	if !Has("llm: unsupported proxy scheme %q (use http, https, socks5 or socks5h)") {
+		Register("llm: unsupported proxy scheme %q (use http, https, socks5 or socks5h)", "llm: unsupported proxy scheme %q (use http, https, socks5 or socks5h)", "llm: 지원하지 않는 프록시 프로토콜 %q(http, https, socks5 또는 socks5h 사용)")
 	}
 	if !Has("invalid HTTP header name %q") {
 		Register("invalid HTTP header name %q", "invalid HTTP header name %q", "잘못된 HTTP 헤더 이름 %q")

@@ -3289,6 +3289,7 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) settingsPayload() map[string]any {
 	on, backend, braveKey, tavilyKey, proxy := s.m.WebSearch()
 	pyStored, _, _ := s.m.pg.GetSetting(settingPythonInterp)
+	execHost, execWorkDir := s.m.ExecHost()
 	concOn, concLimit := s.m.ConcurrencyLimit()
 	if concLimit == 0 {
 		concLimit = defaultConcurrencyLimit // Return a reasonable default to the UI even when disabled.
@@ -3304,6 +3305,8 @@ func (s *Server) settingsPayload() map[string]any {
 		"tavily_key_set":           strings.TrimSpace(tavilyKey) != "",
 		"web_search_proxy":         proxy,                       // Independent HTTP/HTTPS/SOCKS5 egress proxy; empty means direct.
 		"global_proxy":             s.m.GlobalProxy(),           // Global HTTP/HTTPS/SOCKS5 egress proxy for all target traffic; empty means direct.
+		"execution_host":           execHost,                    // Remote host (user@host) where worker Bash runs over SSH; empty means local.
+		"execution_workdir":        execWorkDir,                 // Remote working directory for worker Bash; ignored when execution_host is empty.
 		"python_interpreter":       strings.TrimSpace(pyStored), // User/automatically configured value; empty uses runtime detection.
 		"workers":                  s.m.Workers(),               // Concurrent worker agents, default 3; applies to subsequently started tasks.
 		"task_concurrency_enabled": concOn,                      // Task concurrency-limit switch, disabled by default.
@@ -3377,6 +3380,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		TavilyKey        *string `json:"tavily_search_api_key"`
 		WebSearchProxy   *string `json:"web_search_proxy"`   // Independent HTTP/HTTPS/SOCKS5 proxy; null preserves it and empty clears it.
 		GlobalProxy      *string `json:"global_proxy"`       // Global HTTP/HTTPS/SOCKS5 proxy; null preserves it and empty selects direct connections.
+		ExecutionHost    *string `json:"execution_host"`     // Remote host (user@host) for worker Bash over SSH; null preserves, empty = local.
+		ExecutionWorkDir *string `json:"execution_workdir"`  // Remote working directory for worker Bash; null preserves.
 		PythonInterp     *string `json:"python_interpreter"` // Python interpreter path for custom script tools.
 		Workers          *int    `json:"workers"`            // Positive concurrent-worker count; applies to subsequently started tasks.
 		// Task concurrency caps running tasks. Disabled means unlimited; enabled queues overflow and admits it when slots open.
@@ -3542,6 +3547,21 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		changed = true // capture-off egress is baked into agents at build time → rebuild
+	}
+	if req.ExecutionHost != nil || req.ExecutionWorkDir != nil {
+		// Fill unspecified fields from current state so a partial PUT doesn't reset them.
+		host, workDir := s.m.ExecHost()
+		if req.ExecutionHost != nil {
+			host = *req.ExecutionHost
+		}
+		if req.ExecutionWorkDir != nil {
+			workDir = *req.ExecutionWorkDir
+		}
+		if err := s.m.SetExecHost(host, workDir); err != nil {
+			writeError(w, 400, err)
+			return
+		}
+		changed = true // worker Bash execution host is baked into agents at build time → rebuild
 	}
 	if req.WebSearchEnabled != nil || req.WebSearchBackend != nil || req.BraveKey != nil || req.TavilyKey != nil || req.WebSearchProxy != nil {
 		// Fill unspecified fields from current state so a partial PUT doesn't reset them.

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/llmrec"
+	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/compaction"
 	"github.com/Autumn-27/norma/llm"
@@ -416,12 +417,16 @@ func quotaAwareHTTPClient(proxy, sessionHeaderKey string) (*http.Client, error) 
 			return nil, locale.Errorf("llm: invalid proxy %q: %w", proxy, err)
 		}
 		switch proxyURL.Scheme {
-		case "http", "https", "socks5":
+		case "http", "https", "socks5", "socks5h":
 		case "":
-			return nil, locale.Errorf("llm: proxy %q missing scheme (use http://, https:// or socks5://)", proxy)
+			return nil, locale.Errorf("llm: proxy %q missing scheme (use http://, https://, socks5:// or socks5h://)", proxy)
 		default:
-			return nil, locale.Errorf("llm: unsupported proxy scheme %q (use http, https or socks5)", proxyURL.Scheme)
+			return nil, locale.Errorf("llm: unsupported proxy scheme %q (use http, https, socks5 or socks5h)", proxyURL.Scheme)
 		}
+		// socks5h normalizes to socks5 for net/http: its SOCKS5 dialer already
+		// sends the target hostname to the proxy (remote DNS), so the
+		// full-obfuscation semantics are preserved.
+		proxyURL.Scheme = traffic.NormalizeGoScheme(proxyURL.Scheme)
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
 	return &http.Client{Transport: quotaAwareTransport{base: transport, sessionHeaderKey: strings.TrimSpace(sessionHeaderKey)}}, nil

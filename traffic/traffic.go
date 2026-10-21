@@ -311,10 +311,13 @@ func (t *Traffic) ProxyAddr() string {
 }
 
 // SetUpstreamProxy points every captured request at a global egress proxy
-// (http/https/socks5, optional user:pass in the URL). An empty raw string clears
-// it, restoring direct dialing. The change is atomic and takes effect on the next
-// connection — no restart, no proxy rebuild. go-mitmproxy dials all three schemes
-// itself, so socks5 works uniformly here regardless of the target tool.
+// (http/https/socks5/socks5h, optional user:pass in the URL). An empty raw
+// string clears it, restoring direct dialing. The change is atomic and takes
+// effect on the next connection — no restart, no proxy rebuild. go-mitmproxy
+// dials all schemes itself, so socks5 works uniformly here regardless of the
+// target tool. socks5h is normalized to socks5 for the Go dialer: x/net/proxy's
+// SOCKS5 dialer already sends the hostname to the proxy (remote DNS), so the
+// full-obfuscation semantics are preserved.
 func (t *Traffic) SetUpstreamProxy(raw string) error {
 	if strings.TrimSpace(raw) == "" {
 		t.upstream.Store(nil)
@@ -324,13 +327,28 @@ func (t *Traffic) SetUpstreamProxy(raw string) error {
 	if err != nil {
 		return err
 	}
+	u.Scheme = NormalizeGoScheme(u.Scheme)
 	t.upstream.Store(u)
 	return nil
 }
 
-// ValidateProxyURL parses and checks a proxy URL (http/https/socks5, optional
-// user:pass), returning the parsed URL. Exposed so callers can validate a global
-// proxy before persisting it even when the traffic proxy itself is disabled.
+// NormalizeGoScheme maps socks5h to socks5 for Go proxy consumers (net/http's
+// http.ProxyURL and x/net/proxy's SOCKS5 dialer). Both already perform remote
+// DNS — the SOCKS5 request carries the target hostname — so the obfuscation
+// semantics of socks5h are unchanged. Other schemes pass through untouched.
+func NormalizeGoScheme(scheme string) string {
+	if scheme == "socks5h" {
+		return "socks5"
+	}
+	return scheme
+}
+
+// ValidateProxyURL parses and checks a proxy URL (http/https/socks5/socks5h,
+// optional user:pass), returning the parsed URL. Exposed so callers can validate
+// a global proxy before persisting it even when the traffic proxy itself is
+// disabled. socks5h means "remote DNS" for CLI consumers (curl/requests read the
+// scheme verbatim from the worker env); Go consumers normalize it via
+// NormalizeGoScheme.
 func ValidateProxyURL(raw string) (*url.URL, error) {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
@@ -338,11 +356,11 @@ func ValidateProxyURL(raw string) (*url.URL, error) {
 		return nil, locale.Errorf("Parse proxy address %q: %w", raw, err)
 	}
 	switch u.Scheme {
-	case "http", "https", "socks5":
+	case "http", "https", "socks5", "socks5h":
 	case "":
-		return nil, locale.Errorf("Proxy %q has no scheme; use http://, https://, or socks5://", raw)
+		return nil, locale.Errorf("Proxy %q has no scheme; use http://, https://, socks5://, or socks5h://", raw)
 	default:
-		return nil, locale.Errorf("Unsupported proxy scheme %q; use http, https, or socks5", u.Scheme)
+		return nil, locale.Errorf("Unsupported proxy scheme %q; use http, https, socks5, or socks5h", u.Scheme)
 	}
 	if u.Host == "" {
 		return nil, locale.Errorf("Proxy %q has no hostname", raw)

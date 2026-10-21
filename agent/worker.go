@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/Autumn-27/artex/locale"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
@@ -59,6 +61,8 @@ type Worker struct {
 	workDir         string
 	proxyAddr       string
 	proxyCACert     string            // recording proxy's CA cert path (for WebFetch HTTPS verify)
+	execHost        string            // remote host (user@host) for Bash over SSH; empty = local
+	execWorkDir     string            // remote working directory for Bash; ignored when execHost is empty
 	webSearch       WebSearchOpts     // web_search tool backend selection (off by default)
 	tx              *transcript.Store // raw LLM conversation persistence (nil = off)
 	window          int               // context window in tokens (for compaction)
@@ -175,6 +179,83 @@ func defaultToolsExcept(exclude ...string) []actool.CoreTool {
 	return out
 }
 
+// wrapBashRemote returns a copy of tools in which the "Bash" tool is wrapped so
+// its commands execute on the remote host over SSH instead of locally. Other
+// tools pass through unchanged. An empty host returns tools as-is (local).
+func wrapBashRemote(tools []actool.CoreTool, host, workDir string) []actool.CoreTool {
+	if host == "" {
+		return tools
+	}
+	out := make([]actool.CoreTool, 0, len(tools))
+	for _, t := range tools {
+		if t.Name() == "Bash" {
+			out = append(out, newRemoteBash(t, host, workDir))
+		} else {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// newRemoteBash wraps a Bash CoreTool so its commands run on the remote host
+// over SSH. It delegates to the inner tool (preserving timeouts, background
+// handling, and the safety floor) and only rewrites the command string to run
+// remotely. CheckPermissions still sees the model's original command, so the
+// catastrophic-command floor evaluates the real intent, not the SSH wrapper.
+func newRemoteBash(inner actool.CoreTool, host, workDir string) actool.CoreTool {
+	desc := inner.Description() + " (runs on remote host " + host
+	if workDir != "" {
+		desc += ", cwd " + workDir
+	}
+	desc += ")"
+	return actool.Build(actool.Spec{
+		Name:        inner.Name(),
+		Description: desc,
+		Prompt:      inner.Prompt(),
+		Schema:      inner.InputSchema(),
+		ReadOnly:    func(in json.RawMessage) bool { return inner.IsReadOnly(in) },
+		Concurrent:  func(in json.RawMessage) bool { return inner.IsConcurrencySafe(in) },
+		Permissions: inner.CheckPermissions,
+		Run: func(ctx context.Context, input json.RawMessage, tc *actool.ToolContext) (actool.Result, error) {
+			var m map[string]any
+			if err := json.Unmarshal(input, &m); err != nil {
+				// Not a plain command object; let the inner tool handle/reject it.
+				return inner.Call(ctx, input, tc)
+			}
+			cmd, ok := m["command"].(string)
+			if !ok {
+				// Missing or non-string command; the inner tool owns schema errors,
+				// and rewriting a non-string to "" would mask them.
+				return inner.Call(ctx, input, tc)
+			}
+			m["command"] = remoteSSHCommand(host, workDir, cmd)
+			newInput, err := json.Marshal(m)
+			if err != nil {
+				return inner.Call(ctx, input, tc)
+			}
+			return inner.Call(ctx, newInput, tc)
+		},
+	})
+}
+
+// remoteSSHCommand rewrites a local shell command so it runs on the remote host
+// over SSH. The command (prefixed with a PATH export for Homebrew tools and a cd
+// into workDir) is base64-encoded and decoded by a remote bash, so quoting and
+// newlines survive the local shell + SSH + remote shell re-parsing intact. The
+// outer single quotes are consumed by the local shell; the inner double quotes
+// and the base64 payload reach the remote shell, where `bash -c` runs the decode.
+// The PATH export makes Homebrew-installed attack tools (nmap, etc.) reachable
+// under a non-interactive SSH session, whose default PATH omits /opt/homebrew/bin.
+func remoteSSHCommand(host, workDir, command string) string {
+	script := `export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"; `
+	if workDir != "" {
+		script += "cd " + workDir + " && "
+	}
+	script += command
+	b64 := base64.StdEncoding.EncodeToString([]byte(script))
+	return "ssh " + host + " 'bash -c \"echo " + b64 + " | base64 -d | bash\"'"
+}
+
 func (w *Worker) SetCompactionWindowResolver(fn func() int) { w.windowFn = fn }
 
 func (w *Worker) compactionWindow() int {
@@ -188,6 +269,14 @@ func (w *Worker) compactionWindow() int {
 // traffic through, plus the CA cert path WebFetch trusts to verify HTTPS through
 // that MITM proxy. Empty addr disables the hint.
 func (w *Worker) SetProxy(addr, caCert string) { w.proxyAddr, w.proxyCACert = addr, caCert }
+
+// SetExecHost configures the remote host (user@host) where this worker's Bash
+// commands execute over SSH, plus the remote working directory they cd into
+// first. Empty host = local execution (default). When set, the Bash tool is
+// wrapped so every command runs on the remote host instead of the console
+// machine — keeping the console a pure orchestrator while attack commands run
+// where the egress (Tor) lives.
+func (w *Worker) SetExecHost(host, workDir string) { w.execHost, w.execWorkDir = host, workDir }
 
 // SetWebSearch selects the web_search backend for this worker (off by default).
 func (w *Worker) SetWebSearch(o WebSearchOpts) { w.webSearch = o }
@@ -365,6 +454,11 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// Omit MultiEdit/Glob/Grep for workers: Edit handles precise changes and Bash handles
 	// searches. Keep Read/Write/Edit/LS/Bash/Sleep, reducing low-value tool selection.
 	base = append(base, defaultToolsExcept("MultiEdit", "Glob", "Grep")...)
+	// When a remote execution host is configured, relocate Bash to it over SSH so
+	// attack commands run where the egress (Tor) lives and the console stays a
+	// pure orchestrator. File tools stay local; workers should prefer inline
+	// heredoc scripts in Bash to avoid a local/remote file split.
+	base = wrapBashRemote(base, w.execHost, w.execWorkDir)
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts), IntentID: intent.ID})
 	tools, def, cleanup := AugmentTools(ctx, "worker", base)
 	defer cleanup()
@@ -424,8 +518,9 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		PermissionMode:  permission.ModeBypass,
 		// WebFetch uses the capture proxy just like curl. Load its CA so MITM re-signed
 		// HTTPS certificates validate normally, rather than disabling verification; empty proxy means direct.
+		// socks5h normalizes to socks5 for net/http (remote DNS either way).
 		EnableWebFetch: true,
-		WebFetchProxy:  w.proxyAddr,
+		WebFetchProxy:  traffic.NormalizeGoScheme(w.proxyAddr),
 		WebFetchCACert: w.proxyCACert,
 		// Optional web search: ddgs needs no key, brave-free needs BraveKey, tavily needs TavilyKey.
 		// WebSearchProxy is independent of the capture MITM proxy; empty means direct.
@@ -436,7 +531,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		DeepSeekSearchBaseURL: w.webSearch.DeepSeekBaseURL,
 		DeepSeekSearchAPIKey:  w.webSearch.DeepSeekAPIKey,
 		DeepSeekSearchModel:   w.webSearch.DeepSeekModel,
-		WebSearchProxy:        w.webSearch.Proxy,
+		WebSearchProxy:        traffic.NormalizeGoScheme(w.webSearch.Proxy),
 		// Bash HTTP inherits the capture proxy and CA, requiring neither -x nor -k.
 		BashEnv:    proxyEnv(w.proxyAddr, w.proxyCACert),
 		WorkingDir: runDir,

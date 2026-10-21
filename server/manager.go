@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -246,6 +247,13 @@ type Manager struct {
 	// capture is on it becomes the MITM's upstream; when capture is off it is
 	// injected into agent bash env / WebFetch directly. See ProxyAddr.
 	globalProxy string
+	// execHost, when non-empty, makes worker Bash commands execute on a remote
+	// host over SSH instead of locally (user@host). execWorkDir is the remote
+	// working directory those commands cd into first. Empty execHost = local
+	// execution (default). This keeps the console machine a pure orchestrator
+	// while attack commands run where the egress (Tor) lives.
+	execHost    string
+	execWorkDir string
 }
 
 // Settings keys the UI toggles at runtime.
@@ -261,6 +269,10 @@ const (
 	// (http/https/socks5). Empty = direct. Distinct from web_search_proxy (which
 	// only routes the search backend) and the per-profile LLM proxy.
 	settingGlobalProxy = "global_proxy"
+	// settingExecHost / settingExecWorkDir relocate worker Bash execution to a
+	// remote host over SSH (empty = local). See the execHost struct fields.
+	settingExecHost    = "execution_host"
+	settingExecWorkDir = "execution_workdir"
 	settingWorkers     = "workers"
 	settingLLMRecord   = "llm_record"
 	// LLM failover is disabled by default. When enabled, agents using the globally active profile
@@ -438,6 +450,14 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	// off, ProxyAddr hands it to agents directly (bash env / WebFetch).
 	if v, ok, _ := pg.GetSetting(settingGlobalProxy); ok {
 		m.globalProxy = strings.TrimSpace(v)
+	}
+	// Remote execution host for worker Bash (empty = local). The workdir is
+	// only meaningful when a host is set.
+	if v, ok, _ := pg.GetSetting(settingExecHost); ok {
+		m.execHost = strings.TrimSpace(v)
+	}
+	if v, ok, _ := pg.GetSetting(settingExecWorkDir); ok {
+		m.execWorkDir = strings.TrimSpace(v)
 	}
 	if m.traffic != nil {
 		if err := m.traffic.SetUpstreamProxy(m.globalProxy); err != nil {
@@ -661,6 +681,9 @@ func (m *Manager) syncBrowserMCPProxy() {
 
 	proxy := m.ProxyAddr()  // "" when capture off
 	cert := m.ProxyCACert() // "" when capture off
+	// Chromium's --proxy-server understands socks5 (it sends the hostname to the
+	// SOCKS server, i.e. remote DNS); it does not know socks5h, so normalize.
+	proxy = traffic.NormalizeGoScheme(proxy)
 
 	args := stripProxyArgs(decodeStrSlice(srv.Args))
 	env := decodeStrMap(srv.Env)
@@ -779,9 +802,12 @@ func (m *Manager) GlobalProxy() string {
 }
 
 // SetGlobalProxy validates, persists and applies the global egress proxy
-// (http/https/socks5, optional user:pass; empty = direct). It updates the MITM's
-// upstream immediately; callers must rebuild agents (applyLLM) afterwards so the
-// capture-off path (bash env / WebFetch) picks up the change too.
+// (http/https/socks5/socks5h, optional user:pass; empty = direct). It updates the
+// MITM's upstream immediately; callers must rebuild agents (applyLLM) afterwards so
+// the capture-off path (bash env / WebFetch) picks up the change too. socks5h
+// selects full obfuscation: CLI tools (curl/requests) resolve DNS at the proxy via
+// the verbatim env var, while Go consumers normalize to socks5 (remote DNS there
+// too — see traffic.NormalizeGoScheme).
 func (m *Manager) SetGlobalProxy(raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw != "" {
@@ -802,6 +828,43 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 	}
 	// Keep the browser MCP's egress in sync with the new global proxy too.
 	m.syncBrowserMCPProxy()
+	return nil
+}
+
+// ExecHost returns the configured remote execution host for worker Bash
+// (user@host) and its remote working directory. Empty host = local execution.
+func (m *Manager) ExecHost() (host, workDir string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.execHost, m.execWorkDir
+}
+
+// execHostRE constrains the remote execution host to a strict user@host form
+// (optionally user@[IPv6 literal]). The value is interpolated verbatim into the
+// ssh command line workers run, so a hostile setting must not be able to
+// smuggle ssh options ("-oProxyCommand=…") or shell metacharacters through.
+var execHostRE = regexp.MustCompile(`^[A-Za-z0-9._-]+@(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+)$`)
+
+// SetExecHost persists and applies the remote execution host for worker Bash.
+// host is user@host (empty = local execution); workDir is the remote directory
+// commands cd into first (ignored when host is empty). Callers must rebuild
+// agents (applyLLM) afterwards so running workers pick up the change.
+func (m *Manager) SetExecHost(host, workDir string) error {
+	host = strings.TrimSpace(host)
+	workDir = strings.TrimSpace(workDir)
+	if host != "" && !execHostRE.MatchString(host) {
+		return fmt.Errorf("execution_host must be user@host (letters, digits, dots, dashes, underscores; IPv6 host in brackets), got %q", host)
+	}
+	if err := m.pg.SetSetting(settingExecHost, host); err != nil {
+		return err
+	}
+	if err := m.pg.SetSetting(settingExecWorkDir, workDir); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.execHost = host
+	m.execWorkDir = workDir
+	m.mu.Unlock()
 	return nil
 }
 

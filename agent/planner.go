@@ -10,6 +10,7 @@ import (
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/permission"
@@ -371,8 +372,8 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
 		PermissionMode:  permission.ModeBypass,
-		EnableWebFetch:  true, // Route through capture proxy and trust its CA for re-signed HTTPS certificates.
-		WebFetchProxy:   p.proxyAddr,
+		EnableWebFetch:  true, // Route through capture proxy and trust its CA for re-signed HTTPS certificates (socks5h normalizes to socks5 for net/http; remote DNS either way).
+		WebFetchProxy:   traffic.NormalizeGoScheme(p.proxyAddr),
 		WebFetchCACert:  p.proxyCACert,
 		// Optional web search: ddgs needs no key, brave-free needs BraveKey, tavily needs TavilyKey.
 		// WebSearchProxy is independent of capture MITM; empty means direct.
@@ -383,7 +384,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		DeepSeekSearchBaseURL: p.webSearch.DeepSeekBaseURL,
 		DeepSeekSearchAPIKey:  p.webSearch.DeepSeekAPIKey,
 		DeepSeekSearchModel:   p.webSearch.DeepSeekModel,
-		WebSearchProxy:        p.webSearch.Proxy,
+		WebSearchProxy:        traffic.NormalizeGoScheme(p.webSearch.Proxy),
 		BashEnv:               proxyEnv(p.proxyAddr, p.proxyCACert), // Bash subprocesses inherit the proxy and trusted CA.
 		WorkingDir:            taskDir,                              // Task working directory: <workDir>/tasks/<taskID>.
 		ToolOutputDir:         cmdOutDir(taskDir),
